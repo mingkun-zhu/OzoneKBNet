@@ -1,0 +1,7 @@
+OzoneKBNet
+
+This repository contains the implementation of OzoneKBNet for station-level ozone forecasting.
+
+Parts of the experimental scaffold are inspired by the open-source Time-Series-Library (TSLib) project. The original TSLib project is released under the MIT License.
+
+This repository does not redistribute raw air-quality monitoring data or ERA5 reanalysis data.

@@ -1,0 +1,68 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+wandb/
+runs/
+
+# Runtime outputs
+results/
+outputs/
+caches/
+cache/
+checkpoints/
+saved_models/
+pretrained/
+
+# Data
+data/
+datasets/
+raw_data/
+processed_data/
+
+# Model / retrieval / cache artifacts
+*.pt
+*.pth
+*.ckpt
+*.pkl
+*.pickle
+*.faiss
+*.index
+*.npy
+*.npz
+*.h5
+*.hdf5
+
+# Tables and raw data files
+*.csv
+*.xlsx
+*.xls
+*.parquet
+*.feather
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# OS files
+.DS_Store
+Thumbs.db
