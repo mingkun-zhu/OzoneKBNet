@@ -66,3 +66,8 @@ processed_data/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Allow fixed test samples for review and evaluation protocol checking
+!test_data/
+!test_data/**
+!test_data/**/*.csv

@@ -247,3 +247,13 @@ If you use this code, please cite the corresponding paper after publication.
 ## License
 
 This project is released under the MIT License for academic research use. Please see the `LICENSE` file for details.
+
+## Test Data
+
+The repository provides the fixed 2025 test samples under:
+
+test_data/data_for_test_2025_samples/
+
+These samples are provided to facilitate review, check the required CSV schema, and illustrate the sample-level evaluation protocol. Each CSV file contains 144 hourly rows, including a 96-hour input window and a 48-hour target window.
+
+The full raw and processed training datasets, knowledge-base files, FAISS indices, and model checkpoints are not redistributed due to data redistribution restrictions and file-size considerations.
