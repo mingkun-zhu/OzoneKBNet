@@ -250,10 +250,10 @@ This project is released under the MIT License for academic research use. Please
 
 ## Test Data
 
-The repository provides the fixed 2025 test samples under:
+The repository provides the fixed 2025 test samples used for evaluation at:
 
-test_data/data_for_test_2025_samples/
+https://github.com/mingkun-zhu/OzoneKBNet/tree/main/test_data/data_for_test_2025_samples
 
 These samples are provided to facilitate review, check the required CSV schema, and illustrate the sample-level evaluation protocol. Each CSV file contains 144 hourly rows, including a 96-hour input window and a 48-hour target window.
 
-The full raw and processed training datasets, knowledge-base files, FAISS indices, and model checkpoints are not redistributed due to data redistribution restrictions and file-size considerations.
+The test samples are not the full raw or processed training datasets. The full raw and processed training datasets, knowledge-base files, FAISS indices, and model checkpoints are not redistributed due to data redistribution restrictions and file-size considerations.
