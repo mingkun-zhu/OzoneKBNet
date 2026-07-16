@@ -311,7 +311,7 @@ def profile_online_inference(exp: ExpOzoneKBForecast, args, warmup: int, max_sam
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--cities", nargs="+", default=DEFAULT_CITIES)
-    p.add_argument("--out_dir", type=str, default="./results/profile_stats")
+    p.add_argument("--out_dir", type=str, default="./profile_stats")
     p.add_argument("--root_path", type=str, default="./data")
     p.add_argument("--result_root", type=str, default="./results")
     p.add_argument("--checkpoints", type=str, default="./checkpoints")

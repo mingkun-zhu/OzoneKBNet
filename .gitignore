@@ -1,73 +1,53 @@
-# Python cache
+# Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
 *.so
 *.egg-info/
-.eggs/
-build/
-dist/
+.pytest_cache/
+.mypy_cache/
 
-# IDE / editor
+# IDE and operating system
 .idea/
 .vscode/
-*.swp
-*.swo
+.DS_Store
+Thumbs.db
 
-# Logs
-*.log
-logs/
-wandb/
-runs/
+# Environments
+.venv/
+venv/
+env/
+.env
 
 # Runtime outputs
-results/
-outputs/
 caches/
-cache/
 checkpoints/
-saved_models/
-pretrained/
+results/
+profile_stats/
 
-# Data
-data/
-datasets/
-raw_data/
-processed_data/
-
-# Model / retrieval / cache artifacts
+# Model and retrieval assets
 *.pt
 *.pth
 *.ckpt
 *.pkl
 *.pickle
 *.faiss
-*.index
 *.npy
 *.npz
-*.h5
-*.hdf5
 
-# Tables and raw data files
-*.csv
-*.xlsx
-*.xls
-*.parquet
-*.feather
+# Logs and temporary files
+*.log
+*.pid
+*.tmp
+*.bak
+*.swp
 
 # Archives
-*.zip
 *.tar
 *.tar.gz
-*.rar
-*.7z
+*.zip
 
-# OS files
-.DS_Store
-Thumbs.db
-
-# Allow fixed test samples for review and evaluation protocol checking
-!test_data/
-!test_data/**
-!test_data/**/*.csv
+# LaTeX and plots generated during local analysis
+*.aux
+*.bbl
+*.blg
+*.out

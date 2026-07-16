@@ -27,7 +27,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--kb_year", type=int, default=2023)
     p.add_argument("--train_year", type=int, default=2024)
     p.add_argument("--test_year", type=int, default=2025)
-    p.add_argument("--rolling_update", type=int, default=1)
+    p.add_argument("--rolling_update", type=int, default=0, help="Compatibility option; keep 0 for the fixed 2023/2024/2025 protocol.")
+    p.add_argument(
+        "--retrieval_scope",
+        type=str,
+        default="city",
+        choices=["city", "station"],
+        help=(
+            "Retrieval candidate scope. 'city' uses the full urban-agglomeration KB; "
+            "'station' restricts every query to historical windows from the same station."
+        ),
+    )
 
     p.add_argument("--enc_in", type=int, default=5)
     p.add_argument("--seq_len", type=int, default=96)
@@ -84,6 +94,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p.add_argument("--force_retrain", type=int, default=0)
     p.add_argument("--force_rebuild_kb", type=int, default=0)
+    p.add_argument("--force_rebuild_stage2_cache", type=int, default=0)
+    p.add_argument("--loader_workers", type=int, default=8)
     return p
 
 

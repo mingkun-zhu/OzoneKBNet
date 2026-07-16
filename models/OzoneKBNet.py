@@ -138,13 +138,16 @@ class OzoneKBNet(nn.Module):
     v6:
     - keep the original online forward for evaluation/debugging
     - add stage2 retrieval cache support:
-      cache only frozen retrieval outputs (z-scored s1/s2/s3 and candidate y sequences)
+      cache only frozen retrieval outputs (z-scored cosine/trend scores and candidate y sequences)
       so final training logic remains learnable and precision is preserved
     """
     def __init__(self, cfg) -> None:
         super().__init__()
         self.cfg = cfg
         self.branch_mode = getattr(cfg, "branch_mode", "full")
+        self.retrieval_scope = str(getattr(cfg, "retrieval_scope", "city")).lower()
+        if self.retrieval_scope not in {"city", "station"}:
+            raise ValueError(f"Unsupported retrieval_scope={self.retrieval_scope!r}")
         self.scales = tuple(cfg.scales)
         self.seq_len = cfg.seq_len
         self.pred_len = cfg.pred_len
@@ -183,6 +186,7 @@ class OzoneKBNet(nn.Module):
         })
         self.kb: Optional[Dict] = None
         self.kb_device: Optional[torch.device] = None
+        self.station_to_indices: Dict[str, Dict[str, np.ndarray]] = {}
         self.freeze_retrieval_encoders(False)
 
 
@@ -291,8 +295,71 @@ class OzoneKBNet(nn.Module):
     def set_kb(self, kb_bundle: Dict) -> None:
         self.kb = kb_bundle
         self.kb_device = None
+        self.station_to_indices = {}
+        for scale in self.scales:
+            scale_key = str(scale)
+            station_map: Dict[str, List[int]] = {}
+            for idx, meta in enumerate(self.kb[scale_key]["meta"]):
+                station = str(meta["station"])
+                station_map.setdefault(station, []).append(idx)
+            self.station_to_indices[scale_key] = {
+                station: np.asarray(indices, dtype=np.int64)
+                for station, indices in station_map.items()
+            }
         device = next(self.parameters()).device
         self._ensure_kb_device(device)
+
+    def _coarse_candidate_indices(
+        self,
+        q_emb_t: torch.Tensor,
+        scale: int,
+        query_station: Optional[str] = None,
+    ) -> np.ndarray:
+        """Return coarse candidate indices under the configured retrieval scope.
+
+        City scope preserves the original global FAISS search exactly. Station scope
+        computes exact inner-product ranking only within the query station's subset.
+        Since all embeddings are L2-normalized, this is equivalent to cosine search.
+        """
+        if self.kb is None:
+            raise RuntimeError("KB has not been attached.")
+        kb = self.kb[str(scale)]
+
+        if self.retrieval_scope == "city":
+            q_emb_np = q_emb_t.detach().cpu().numpy().astype(np.float32)
+            _, idxs = search_index(
+                kb["index"],
+                q_emb_np[None, :],
+                topk=min(int(self.cfg.coarse_top_m), len(kb["meta"])),
+            )
+            return idxs[0]
+
+        if not query_station:
+            raise ValueError(
+                "query_station is required when retrieval_scope='station'."
+            )
+        station = str(query_station)
+        station_indices_np = self.station_to_indices[str(scale)].get(station)
+        if station_indices_np is None or station_indices_np.size == 0:
+            available = sorted(self.station_to_indices[str(scale)].keys())[:8]
+            raise KeyError(
+                f"Station {station!r} is absent from the KB at scale={scale}. "
+                f"Example available stations: {available}"
+            )
+
+        device = q_emb_t.device
+        station_indices_t = torch.as_tensor(
+            station_indices_np, dtype=torch.long, device=device
+        )
+        station_emb_t = kb["embeddings_t"].index_select(0, station_indices_t)
+        cosine_scores = torch.sum(
+            station_emb_t * q_emb_t.unsqueeze(0), dim=1
+        )
+        top_m = min(int(self.cfg.coarse_top_m), cosine_scores.numel())
+        _, local_pos_t = torch.topk(
+            cosine_scores, k=top_m, largest=True, sorted=True
+        )
+        return station_indices_np[local_pos_t.detach().cpu().numpy()]
 
     def encode_scale(self, x: torch.Tensor, scale: int) -> torch.Tensor:
         pooled = self.pool_to_scale(x, scale)
@@ -357,15 +424,24 @@ class OzoneKBNet(nn.Module):
                 dedup.append(j)
         return dedup
 
-    def _retrieve_one_scale(self, q_std_t: torch.Tensor, q_emb_t: torch.Tensor, q_feat_t: torch.Tensor, scale: int):
+    def _retrieve_one_scale(
+        self,
+        q_std_t: torch.Tensor,
+        q_emb_t: torch.Tensor,
+        q_feat_t: torch.Tensor,
+        scale: int,
+        query_station: Optional[str] = None,
+    ):
         if self.kb is None:
             raise RuntimeError("KB has not been attached.")
         kb = self.kb[str(scale)]
         device = q_std_t.device
 
-        q_emb_np = q_emb_t.detach().cpu().numpy().astype(np.float32)
-        _, idxs = search_index(kb["index"], q_emb_np[None, :], topk=self.cfg.coarse_top_m)
-        idxs = idxs[0]
+        idxs = self._coarse_candidate_indices(
+            q_emb_t=q_emb_t,
+            scale=scale,
+            query_station=query_station,
+        )
         cand_indices = self._dedup_candidate_indices(idxs, kb["meta"])
         if len(cand_indices) == 0:
             raise RuntimeError(f"No candidates left after dedup for scale={scale}")
@@ -376,31 +452,61 @@ class OzoneKBNet(nn.Module):
         cand_y_t = kb["y_std_t"].index_select(0, idx_t)
 
         cosine_scores = torch.sum(cand_emb_t * q_emb_t.unsqueeze(0), dim=1)
-        embed_scores = -torch.sum((cand_emb_t - q_emb_t.unsqueeze(0)) ** 2, dim=1)
         q_scale_t = self.pool_to_scale(q_std_t.unsqueeze(0), scale)[0]
         trend_scores = self._local_trend_scores_torch(q_scale_t, cand_x_t, scale)
 
         s1 = self._zscore_torch(cosine_scores)
-        s2 = self._zscore_torch(embed_scores)
         s3 = self._zscore_torch(trend_scores)
 
-        return self._finish_one_scale_from_scores(q_feat_t, scale, s1, s2, s3, cand_y_t)
+        return self._finish_one_scale_from_scores(
+            q_feat_t, scale, s1, s3, cand_y_t
+        )
 
     def _finish_one_scale_from_scores(
         self,
         q_feat_t: torch.Tensor,
         scale: int,
         s1: torch.Tensor,
-        s2: torch.Tensor,
         s3: torch.Tensor,
         cand_y_t: torch.Tensor,
     ):
-        h_t = torch.cat([q_feat_t, torch.stack([s1.mean(), s2.mean(), s3.mean()], dim=0)], dim=0)
-        g = F.softmax(self.rank_gate(h_t), dim=-1)
+        # Exp16 used two mathematically equivalent representation-space
+        # channels: cosine similarity and normalized squared Euclidean
+        # similarity. Exp36 retains the learned Exp16 gate network for
+        # checkpoint compatibility, but analytically merges its first
+        # two logits into one effective cosine gate.
+        #
+        # Repeating s1 in the legacy gate input replaces the redundant
+        # Euclidean summary without recomputing Euclidean distance.
+        h_t = torch.cat(
+            [
+                q_feat_t,
+                torch.stack(
+                    [s1.mean(), s1.mean(), s3.mean()],
+                    dim=0,
+                ),
+            ],
+            dim=0,
+        )
+
+        legacy_logits = self.rank_gate(h_t)
+
+        effective_logits = torch.stack(
+            [
+                torch.logsumexp(legacy_logits[:2], dim=0),
+                legacy_logits[2],
+            ],
+            dim=0,
+        )
+        effective_gate = F.softmax(effective_logits, dim=-1)
+
         w1 = F.softmax(s1, dim=0)
-        w2 = F.softmax(s2, dim=0)
         w3 = F.softmax(s3, dim=0)
-        weights_t = g[0] * w1 + g[1] * w2 + g[2] * w3
+
+        weights_t = (
+            effective_gate[0] * w1
+            + effective_gate[1] * w3
+        )
 
         topk = min(self.cfg.final_top_k, weights_t.numel())
         sel_w_t, sel_pos_t = torch.topk(weights_t, k=topk, dim=0, largest=True, sorted=True)
@@ -421,11 +527,15 @@ class OzoneKBNet(nn.Module):
         return agg_t, z_t
 
     @torch.inference_mode()
-    def build_stage2_cache_for_x(self, x_std_t: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def build_stage2_cache_for_x(
+        self,
+        x_std_t: torch.Tensor,
+        query_station: Optional[str] = None,
+    ) -> Dict[str, torch.Tensor]:
         """
         Cache only frozen retrieval-side outputs.
         Returns per-scale:
-        - s1/s2/s3: z-scored similarity vectors padded to [M]
+        - s1/s3: z-scored cosine and local-trend vectors padded to [M]
         - cand_y: candidate future sequences padded to [M, Lr, 1]
         - mask: valid candidates in the padded arrays [M]
         """
@@ -442,9 +552,11 @@ class OzoneKBNet(nn.Module):
         for scale in self.scales:
             kb = self.kb[str(scale)]
             q_emb_t = self.encode_scale(x_std_t.unsqueeze(0), scale)[0]
-            q_emb_np = q_emb_t.detach().cpu().numpy().astype(np.float32)
-            _, idxs = search_index(kb["index"], q_emb_np[None, :], topk=self.cfg.coarse_top_m)
-            idxs = idxs[0]
+            idxs = self._coarse_candidate_indices(
+                q_emb_t=q_emb_t,
+                scale=scale,
+                query_station=query_station,
+            )
             cand_indices = self._dedup_candidate_indices(idxs, kb["meta"])
             if len(cand_indices) == 0:
                 raise RuntimeError(f"No candidates left after dedup for scale={scale}")
@@ -455,31 +567,26 @@ class OzoneKBNet(nn.Module):
             cand_y_t = kb["y_std_t"].index_select(0, idx_t)
 
             cosine_scores = torch.sum(cand_emb_t * q_emb_t.unsqueeze(0), dim=1)
-            embed_scores = -torch.sum((cand_emb_t - q_emb_t.unsqueeze(0)) ** 2, dim=1)
             q_scale_t = self.pool_to_scale(x_std_t.unsqueeze(0), scale)[0]
             trend_scores = self._local_trend_scores_torch(q_scale_t, cand_x_t, scale)
 
             s1 = self._zscore_torch(cosine_scores)
-            s2 = self._zscore_torch(embed_scores)
             s3 = self._zscore_torch(trend_scores)
 
             nc = s1.numel()
             Lr = cand_y_t.shape[1]
             s1_pad = torch.zeros(max_m, dtype=torch.float32, device=device)
-            s2_pad = torch.zeros(max_m, dtype=torch.float32, device=device)
             s3_pad = torch.zeros(max_m, dtype=torch.float32, device=device)
             y_pad = torch.zeros(max_m, Lr, 1, dtype=torch.float32, device=device)
             mask = torch.zeros(max_m, dtype=torch.bool, device=device)
 
             take = min(max_m, nc)
             s1_pad[:take] = s1[:take]
-            s2_pad[:take] = s2[:take]
             s3_pad[:take] = s3[:take]
             y_pad[:take] = cand_y_t[:take]
             mask[:take] = True
 
             cache[f"s1_{scale}"] = s1_pad.cpu()
-            cache[f"s2_{scale}"] = s2_pad.cpu()
             cache[f"s3_{scale}"] = s3_pad.cpu()
             cache[f"cand_y_{scale}"] = y_pad.cpu()
             cache[f"mask_{scale}"] = mask.cpu()
@@ -509,7 +616,6 @@ class OzoneKBNet(nn.Module):
 
             for scale in self.scales:
                 s1_full = cache_batch[f"s1_{scale}"][b].to(device)
-                s2_full = cache_batch[f"s2_{scale}"][b].to(device)
                 s3_full = cache_batch[f"s3_{scale}"][b].to(device)
                 cand_y_full = cache_batch[f"cand_y_{scale}"][b].to(device)
                 mask_full = cache_batch[f"mask_{scale}"][b].to(device).bool()
@@ -518,11 +624,14 @@ class OzoneKBNet(nn.Module):
                     raise RuntimeError(f"Cached retrieval has zero valid candidates for scale={scale}")
 
                 s1 = s1_full[mask_full]
-                s2 = s2_full[mask_full]
                 s3 = s3_full[mask_full]
                 cand_y = cand_y_full[mask_full]
 
-                agg_t, z_t = self._finish_one_scale_from_scores(q_feat_t, scale, s1, s2, s3, cand_y)
+                # Legacy caches may still contain s2, but Exp36
+                # intentionally ignores that redundant field.
+                agg_t, z_t = self._finish_one_scale_from_scores(
+                    q_feat_t, scale, s1, s3, cand_y
+                )
                 up = self._upsample_to_48(agg_t.unsqueeze(0), scale)[0]
                 scale_preds.append(up)
                 z_parts.append(z_t)
@@ -556,7 +665,11 @@ class OzoneKBNet(nn.Module):
             "beta": torch.stack(all_beta, dim=0),
         }
 
-    def forward(self, x: torch.Tensor) -> Dict[str, torch.Tensor]:
+    def forward(
+        self,
+        x: torch.Tensor,
+        query_stations: Optional[List[str]] = None,
+    ) -> Dict[str, torch.Tensor]:
         if self.kb is None:
             raise RuntimeError("KB has not been attached. Call set_kb(...) first.")
         self._ensure_kb_device(x.device)
@@ -567,6 +680,20 @@ class OzoneKBNet(nn.Module):
         if self.branch_mode == "direct_only":
             return self._make_direct_only_output(direct)
         batch_size = x.size(0)
+        if self.retrieval_scope == "station":
+            if query_stations is None:
+                raise ValueError(
+                    "query_stations must be supplied for station-restricted retrieval."
+                )
+            if isinstance(query_stations, str):
+                query_stations = [query_stations]
+            if len(query_stations) != batch_size:
+                raise ValueError(
+                    f"Expected {batch_size} query station(s), got {len(query_stations)}."
+                )
+        else:
+            query_stations = [None] * batch_size
+
         horizon_idx = torch.arange(self.pred_len, device=device)
         horizon_emb = self.horizon_emb(horizon_idx)
 
@@ -580,7 +707,13 @@ class OzoneKBNet(nn.Module):
 
             for scale in self.scales:
                 q_emb_t = self.encode_scale(qb, scale)[0]
-                agg_t, z_t = self._retrieve_one_scale(qb[0], q_emb_t, q_feat_t, scale)
+                agg_t, z_t = self._retrieve_one_scale(
+                    qb[0],
+                    q_emb_t,
+                    q_feat_t,
+                    scale,
+                    query_station=query_stations[b],
+                )
                 up = self._upsample_to_48(agg_t.unsqueeze(0), scale)[0]
                 scale_preds.append(up)
                 z_parts.append(z_t)

@@ -91,13 +91,17 @@ class ExpOzoneKBForecast:
         )
         print(
             f"[Init] model={args.model} city={self.city} device={self.device} "
-            f"kb_year={self.args.kb_year} train_year={self.args.train_year} test_year={self.args.test_year}",
+            f"kb_year={self.args.kb_year} train_year={self.args.train_year} "
+            f"test_year={self.args.test_year} retrieval_scope={self.args.retrieval_scope}",
             flush=True,
         )
 
     def _build_paths(self) -> Dict[str, Path]:
         root = Path(self.args.root_path)
-        result_root = Path(self.args.result_root) / self.args.model / self.city
+        result_model_name = self.args.model
+        if str(getattr(self.args, "retrieval_scope", "city")).lower() == "station":
+            result_model_name = f"{result_model_name}_StationRestricted"
+        result_root = Path(self.args.result_root) / result_model_name / self.city
         ckpt_root = Path(self.args.checkpoints) / self.args.model / self.city
         cache_root = Path(self.args.cache_root) / self.args.model / self.city
         return {
@@ -122,11 +126,18 @@ class ExpOzoneKBForecast:
     def _kb_path(self, year: int) -> Path:
         return self.paths["cache_root"] / f"kb_{self.city}_{year}.pkl"
 
+    def _scope_suffix(self) -> str:
+        scope = str(getattr(self.args, "retrieval_scope", "city")).lower()
+        return "" if scope == "city" else f"_{scope}"
+
     def _stage2_ckpt_path(self) -> Path:
-        return self.paths["ckpt_root"] / f"stage2_{self.city}.pt"
+        return self.paths["ckpt_root"] / f"stage2_{self.city}{self._scope_suffix()}.pt"
 
     def _stage2_retrieval_cache_path(self, split: str, kb_year: int) -> Path:
-        return self.paths["cache_root"] / f"stage2_retrieval_cache_{self.city}_{kb_year}_{self.args.train_year}_{split}.pt"
+        return self.paths["cache_root"] / (
+            f"stage2_retrieval_cache_{self.city}_{kb_year}_{self.args.train_year}_"
+            f"{split}{self._scope_suffix()}.pt"
+        )
 
     def _make_loader(self, dataset: Dataset, batch_size: int, shuffle: bool):
         return DataLoader(
@@ -325,7 +336,9 @@ class ExpOzoneKBForecast:
         with torch.inference_mode():
             for i, item in enumerate(items, start=1):
                 x_t = torch.as_tensor(item.x, dtype=torch.float32, device=self.device)
-                sample_cache = self.model.build_stage2_cache_for_x(x_t)
+                sample_cache = self.model.build_stage2_cache_for_x(
+                    x_t, query_station=item.station
+                )
                 for k, v in sample_cache.items():
                     cache_accum.setdefault(k, []).append(v.cpu())
                 if i % 100 == 0 or i == len(items):
@@ -508,7 +521,9 @@ class ExpOzoneKBForecast:
                 x_std = stats.standardize_x(x)
                 x_t = torch.tensor(x_std[None, ...], dtype=torch.float32, device=self.device)
                 with torch.inference_mode():
-                    outputs = self.model(x_t)
+                    outputs = self.model(
+                        x_t, query_stations=[item["station"]]
+                    )
                 pred_std = outputs["y_hat"].detach().cpu().numpy()[0]
                 pred_phys = stats.destandardize_y(pred_std)
                 true_phys = y.astype(np.float32)
@@ -568,6 +583,7 @@ class ExpOzoneKBForecast:
             "mae": mae(trues_arr, preds_arr),
             "mse": mse(trues_arr, preds_arr),
             "rmse": rmse(trues_arr, preds_arr),
+            "retrieval_scope": str(getattr(self.args, "retrieval_scope", "city")),
         }
         with open(model_root / "overall_metrics.json", "w", encoding="utf-8") as f:
             json.dump(overall, f, ensure_ascii=False, indent=2)

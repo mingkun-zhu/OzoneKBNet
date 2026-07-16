@@ -1,78 +1,87 @@
 # OzoneKBNet
 
-This repository provides the implementation of **OzoneKBNet**, a retrieval-augmented historical knowledge-base framework for station-level ozone forecasting across urban agglomerations.
+OzoneKBNet is a retrieval-augmented historical knowledge-base framework for **48-hour station-level ozone forecasting across urban agglomerations**.
 
-OzoneKBNet organizes cross-station historical pollution--meteorology sequences into a city-cluster-level knowledge base, retrieves multi-scale historical analogs, and combines retrieved analog futures with a lightweight direct forecasting branch through reliability-aware residual correction.
+The framework organizes historical pollutant–meteorology sequences from multiple monitoring stations into an explicit regional knowledge base. It retrieves multi-scale historical analogs, re-ranks them using representation similarity and local-trend consistency, aggregates their future trajectories, and integrates the retrieval forecast with a lightweight direct forecasting branch through reliability-aware residual correction.
 
-Repository URL: https://github.com/mingkun-zhu/OzoneKBNet
-
-## Software Availability
-
-- **Software name:** OzoneKBNet
-- **Developers:** Mingkun Zhu et al.
-- **Year first available:** 2026
-- **Programming language:** Python
-- **Repository:** https://github.com/mingkun-zhu/OzoneKBNet
-- **Cost:** Free for academic research
-- **License:** MIT License
-- **Contact:** Please refer to the corresponding author information in the manuscript.
+Repository: https://github.com/mingkun-zhu/OzoneKBNet
 
 ## Main Features
 
-The implementation includes:
-
-- City-cluster historical knowledge-base construction
+- Urban-agglomeration-level historical knowledge-base construction
 - Multi-scale retrieval encoder pretraining
-- FAISS-based historical analog retrieval
+- FAISS-based historical analog recall
 - Candidate re-ranking using embedding similarity and local-trend consistency
-- Multi-scale analog future aggregation
-- Lightweight direct forecasting branch
-- Reliability-aware residual correction
-- Two-stage training and cross-year rolling evaluation
-- Per-sample and city-level metric export
-- Computational profiling for system-level deployment analysis
+- Multi-scale analog-future aggregation
+- Horizon-wise multi-scale fusion
+- Lightweight LSTM direct forecasting branch
+- Reliability-aware, direct-biased residual correction
+- Two-stage cross-year training and evaluation pipeline
+- Station-restricted retrieval option for knowledge-base scope analysis
+- Per-sample and regional metric export
+- Computational profiling of model size, storage, latency, and GPU memory
+- Complete fixed 2025 test set containing 4,836 station-level samples
+
+## Experimental Protocol
+
+The main experiments use a fixed cross-year temporal-transfer protocol:
+
+1. **2023:** pretrain the multi-scale retrieval encoders and construct the historical knowledge base.
+2. **2024:** freeze the retrieval encoders and FAISS indices, then train the Stage-2 forecasting modules.
+3. **2025:** evaluate the trained model on the fixed test samples without using any 2025 information for training, normalization, or knowledge-base construction.
+
+The seven urban agglomerations are processed independently. Separate knowledge bases, model checkpoints, and evaluation outputs are used for each region.
 
 ## Repository Structure
 
 ```text
-.
+OzoneKBNet/
+├── data/                          # User-prepared training and evaluation data
 ├── data_provider/                 # Data loading and sample construction
-├── exp/                           # Experiment pipeline
+├── exp/                           # Two-stage experiment pipeline
 ├── models/                        # OzoneKBNet model definition
-├── scripts/                       # Example running scripts
-├── utils/                         # FAISS, metrics, mining, normalization, and time-series utilities
-├── run_ozone_kb.py                # Main entry point
-├── profile_computation_server.py  # Computational profiling script
-├── README.md
-└── .gitignore
+├── scripts/                       # Example shell scripts
+├── test_data/                     # Complete fixed 2025 test set
+├── utils/                         # Retrieval, mining, metrics, and preprocessing utilities
+├── run_ozone_kb.py                # Main training and evaluation entry point
+├── profile_computation_server.py  # Computational profiling entry point
+├── requirements.txt
+├── LICENSE
+├── NOTICE
+└── README.md
 ```
 
-Runtime outputs such as caches, checkpoints, results, processed datasets, FAISS indices, and model weights are ignored by Git.
+Runtime outputs are written to the following local directories by default:
+
+```text
+./caches
+./checkpoints
+./results
+./profile_stats
+```
+
+These directories and large runtime assets are excluded from Git tracking.
 
 ## Requirements
 
-The code was developed in Python and depends on PyTorch, FAISS, and common scientific-computing packages.
+The implementation requires Python, PyTorch, FAISS, and common scientific-computing packages.
 
-A typical conda environment can be created as follows:
+A recommended environment can be created with:
 
 ```bash
 conda create -n ozonekb python=3.11 -y
 conda activate ozonekb
 ```
 
-Install the main dependencies:
+Install PyTorch according to the CUDA or CPU configuration of the local system. Then install the remaining dependencies:
 
 ```bash
-pip install numpy pandas scipy scikit-learn tqdm fastdtw faiss-cpu
+pip install -r requirements.txt
 ```
 
-Please install PyTorch according to your local CUDA version from the official PyTorch installation instructions. For CPU-only execution, the CPU version of PyTorch can also be used, although GPU acceleration is recommended for model training.
-
-Main dependencies include:
+The minimal dependency list includes:
 
 ```text
-Python
-PyTorch
 NumPy
 pandas
 SciPy
@@ -82,25 +91,69 @@ fastdtw
 FAISS
 ```
 
-## Data Availability and Preparation
+GPU acceleration is recommended for retrieval-encoder pretraining and Stage-2 model training.
 
-The raw air-quality monitoring data and ERA5 reanalysis data used in the study are publicly accessible from their original data providers, as described in the manuscript. Due to data redistribution restrictions and file-size considerations, the raw data and full processed datasets are not redistributed in this repository.
+## Data Organization
 
-Users should download the raw data from the corresponding public sources and prepare processed CSV files following the structure below:
+### Full training and evaluation pipeline
+
+To run the complete 2023–2025 pipeline, prepare the processed data under a root directory using the following structure:
 
 ```text
 data/
 ├── data_for_train_2023/
-│   └── {city}/
+│   └── {region}/
 ├── data_for_train_2024/
-│   └── {city}/
+│   └── {region}/
 ├── data_for_test_2025/
-│   └── {city}/
+│   └── {region}/
 └── data_for_test_2025_samples/
-    └── {city}/{station}/01.csv ... 12.csv
+    └── {region}/{station}/01.csv ... 12.csv
 ```
 
-Each CSV file should contain hourly records of the variables used in the paper:
+The five model input variables are:
+
+```text
+O3
+NO2
+PM2.5
+temperature
+relative_humidity
+```
+
+The input length is 96 hours and the forecasting horizon is 48 hours.
+
+### Released fixed 2025 test set
+
+The repository includes the complete fixed 2025 evaluation set under:
+
+```text
+test_data/data_for_test_2025_samples/
+```
+
+It contains:
+
+- 403 monitoring stations
+- 7 urban agglomerations
+- 4,836 station-level samples
+- 12 monthly samples per station
+- 144 hourly rows per sample
+- 96 historical input hours and 48 future target hours
+
+The released regional directory names are:
+
+| Directory | Urban agglomeration | Stations | Samples |
+|---|---|---:|---:|
+| `shanyang` | Shenyang Metropolitan Area | 35 | 420 |
+| `huabei` | North China Plain | 67 | 804 |
+| `guanzhong` | Guanzhong Plain | 22 | 264 |
+| `sichuanpendi` | Sichuan Basin | 96 | 1,152 |
+| `changsha` | Changsha Metropolitan Area | 21 | 252 |
+| `zhusanjiao` | Pearl River Delta | 91 | 1,092 |
+| `changsanjiao` | Yangtze River Delta | 71 | 852 |
+| **Total** | — | **403** | **4,836** |
+
+Each released CSV file has 144 rows and the following columns:
 
 ```text
 time
@@ -109,26 +162,43 @@ NO2
 PM2.5
 temperature
 relative_humidity
+part
+relative_step
 ```
 
-The input window length is 96 hours, and the forecasting horizon is 48 hours. Metrics are computed after de-standardization in the physical concentration space.
+See `test_data/README.md` for details.
 
-This repository provides implementation code, running scripts, and data-format instructions for reproducing the experimental pipeline. Complete numerical reproduction requires users to prepare the processed data according to the data sources, quality-control rules, station filtering criteria, and sample construction protocol described in the manuscript.
+The fixed test set can be inspected directly. To use it as the evaluation root, pass:
 
-## Experimental Protocol
+```bash
+--root_path ./test_data
+```
 
-The main experiments follow a cross-year temporal transfer protocol:
+Evaluation additionally requires the corresponding trained checkpoint, normalization statistics, knowledge-base cache, and FAISS indices.
 
-1. Build the city-cluster historical knowledge base using the knowledge-base year.
-2. Pretrain multi-scale retrieval encoders.
-3. Construct FAISS indices for historical analog retrieval.
-4. Freeze retrieval encoders and indices.
-5. Train stage-2 forecasting modules on the following year.
-6. Evaluate on fixed 2025 test samples.
+## Data Availability Scope
 
-In the rolling evaluation setting, the knowledge base is updated to the next year while the stage-2 forecasting modules are not re-trained.
+The repository redistributes the complete processed fixed 2025 test set used in the manuscript.
+
+It does not redistribute:
+
+- original raw air-quality monitoring records;
+- original ERA5 reanalysis files;
+- complete 2023 data used for retrieval-encoder pretraining and knowledge-base construction;
+- complete 2024 data used for Stage-2 supervised training;
+- precomputed knowledge-base embeddings;
+- FAISS indices;
+- trained model checkpoints.
+
+The raw air-quality and meteorological data should be obtained from the original providers described in the manuscript. Users who wish to reproduce the full training pipeline must prepare the processed 2023 and 2024 datasets according to the data-quality-control, station-filtering, and sample-construction procedures reported in the paper.
 
 ## Usage
+
+### Display all command-line arguments
+
+```bash
+python run_ozone_kb.py --help
+```
 
 ### Full pipeline
 
@@ -136,53 +206,125 @@ In the rolling evaluation setting, the knowledge base is updated to the next yea
 python run_ozone_kb.py \
   --mode full_pipeline \
   --city changsanjiao \
+  --root_path ./data \
   --device cuda
 ```
 
-### Retrieval encoder pretraining and knowledge-base construction
+### Retrieval-encoder pretraining and knowledge-base construction
 
 ```bash
-bash scripts/pretrain_kb_example.sh
+python run_ozone_kb.py \
+  --mode pretrain_kb \
+  --city changsanjiao \
+  --root_path ./data \
+  --device cuda
+```
+
+or:
+
+```bash
+bash scripts/pretrain_kb_example.sh changsanjiao
 ```
 
 ### Stage-2 supervised training
 
 ```bash
-bash scripts/train_stage2_example.sh
+python run_ozone_kb.py \
+  --mode train_stage2 \
+  --city changsanjiao \
+  --root_path ./data \
+  --device cuda
 ```
 
-### Evaluation
+or:
 
 ```bash
-bash scripts/eval_2025_example.sh
+bash scripts/train_stage2_example.sh changsanjiao
+```
+
+### Fixed 2025 evaluation
+
+```bash
+python run_ozone_kb.py \
+  --mode evaluate \
+  --city changsanjiao \
+  --root_path ./test_data \
+  --checkpoints ./checkpoints \
+  --cache_root ./caches \
+  --result_root ./results \
+  --device cuda
+```
+
+or, when all required data and assets use the default paths:
+
+```bash
+bash scripts/eval_2025_example.sh changsanjiao
+```
+
+### Station-restricted retrieval
+
+The default retrieval scope is the full urban-agglomeration knowledge base. A station-restricted variant can be evaluated with:
+
+```bash
+python run_ozone_kb.py \
+  --mode evaluate \
+  --city changsanjiao \
+  --retrieval_scope station \
+  --root_path ./test_data \
+  --device cuda
 ```
 
 ## Main Arguments
 
-Commonly used arguments include:
+| Argument | Description |
+|---|---|
+| `--mode` | `pretrain_kb`, `train_stage2`, `evaluate`, or `full_pipeline` |
+| `--city` | Regional directory key |
+| `--root_path` | Root directory of the processed data |
+| `--result_root` | Directory for evaluation outputs |
+| `--checkpoints` | Directory for model checkpoints |
+| `--cache_root` | Directory for knowledge-base and FAISS caches |
+| `--device` | Execution device, such as `cuda` or `cpu` |
+| `--seed` | Random seed |
+| `--kb_year` | Knowledge-base and retrieval-encoder pretraining year |
+| `--train_year` | Stage-2 supervised training year |
+| `--test_year` | Fixed evaluation year |
+| `--retrieval_scope` | `city` for the full regional KB or `station` for same-station retrieval |
+| `--seq_len` | Historical input length |
+| `--pred_len` | Forecasting horizon |
+| `--scales` | Temporal retrieval scales |
+| `--coarse_top_m` | Number of coarse retrieval candidates |
+| `--final_top_k` | Number of retained analogs after re-ranking |
+| `--batch_size` | Stage-2 training batch size |
+| `--branch_mode` | Full model, direct-only, or retrieval-only evaluation |
+| `--direct_branch_type` | Direct forecasting branch type |
+| `--direct_biased_gamma_max` | Maximum residual-correction strength |
+
+The compatibility argument `--rolling_update` should remain `0` for the fixed 2023/2024/2025 protocol reported in the manuscript.
+
+## Default Experimental Settings
+
+The released code uses the following central settings for the reported framework:
 
 ```text
---mode          Running mode, such as full_pipeline, pretrain_kb, train_stage2, or eval
---city          Target urban agglomeration
---root_path     Root directory of processed data
---result_root   Directory for saving evaluation results
---checkpoints   Directory for saving model checkpoints
---cache_root    Directory for knowledge-base and FAISS cache files
---device        Running device, such as cuda or cpu
+Knowledge-base year:       2023
+Stage-2 training year:     2024
+Test year:                 2025
+Input length:              96 hours
+Forecast horizon:          48 hours
+Input variables:           5
+Temporal scales:           1, 2, 4, 8
+Coarse candidates:         200
+Final retained analogs:    10
+Stage-2 batch size:        64
+Random seeds:              42, 43, 44
 ```
 
-Default paths are set to local relative directories:
-
-```text
-./data
-./results
-./checkpoints
-./caches
-```
+Additional hyperparameters are available through `run_ozone_kb.py --help` and are documented in the supplementary material of the paper.
 
 ## Outputs
 
-The evaluation process exports the following files:
+Evaluation outputs are saved under the specified result directory. Depending on the selected mode, the pipeline may generate:
 
 ```text
 city_metrics.csv
@@ -193,67 +335,79 @@ pred_o3.npy
 true_o3.npy
 ```
 
-These files are saved under the specified result directory and can be used to compute city-level, station-level, and per-sample evaluation statistics.
+The exported files support regional, station-level, sample-level, and high-ozone post-hoc analyses.
 
 ## Computational Profiling
 
-The script `profile_computation_server.py` can be used to profile system-level computational characteristics, including:
+The script `profile_computation_server.py` reports:
 
-- Total neural parameters
-- Stage-2 trainable parameters
-- Knowledge-base storage
-- FAISS index storage
-- Stage-2 checkpoint size
-- Online inference time per sample
-- Peak GPU memory usage
+- total neural parameters;
+- Stage-2 trainable parameters;
+- knowledge-base storage;
+- FAISS-index storage;
+- Stage-2 checkpoint size;
+- evaluation-style mean latency per sample;
+- peak allocated GPU memory.
 
 Example:
 
 ```bash
 python profile_computation_server.py \
-  --city sichuanpendi \
+  --cities sichuanpendi \
+  --root_path ./test_data \
+  --result_root ./results \
+  --checkpoints ./checkpoints \
+  --cache_root ./caches \
+  --out_dir ./profile_stats \
   --device cuda
 ```
 
-The profiling results can be used to summarize the computational statistics reported in the manuscript and supplementary material.
+The formal profiling protocol processes samples individually with an effective batch size of one, uses five warm-up samples, synchronizes CUDA around the timed pass, and excludes one-time loading of the model, knowledge base, FAISS indices, and checkpoint.
 
 ## Reproducibility Notes
 
-The implementation is designed to match the experimental protocol described in the manuscript. Exact numerical reproduction may depend on:
+Exact numerical reproduction depends on:
 
-- Availability of the same raw data sources
-- The same station quality-control rules
-- The same station filtering and regional grouping criteria
-- The same train/test sample construction protocol
-- The same preprocessing and standardization settings
-- Hardware and software environment differences
-- Random seed settings
+- use of the same raw data sources;
+- identical station-quality-control and station-filtering rules;
+- identical regional grouping;
+- identical preprocessing and normalization statistics;
+- identical 2023 knowledge-base construction;
+- identical 2024 Stage-2 samples;
+- identical fixed 2025 test samples;
+- identical random seeds and training settings;
+- hardware and software differences.
 
-Users are encouraged to use fixed test samples and fixed random seeds when reproducing the reported results.
+The complete fixed 2025 test set is included to make the evaluation sample selection transparent and to support direct inspection of the reported test protocol.
+
+## Software Information
+
+- **Software name:** OzoneKBNet
+- **Developers:** Mingkun Zhu, Xiaoxia Han, Jinde Wu, Haonan Zhu, and Wenxin Chai
+- **Programming language:** Python
+- **First public release:** 2026
+- **Repository:** https://github.com/mingkun-zhu/OzoneKBNet
+- **License:** MIT License
 
 ## Citation
 
-If you use this code, please cite the corresponding paper after publication.
+The code accompanies the following manuscript:
 
 ```bibtex
-@article{ozonekbnet,
-  title   = {Retrieval-Augmented Historical Knowledge-Base Forecasting for Station-Level Ozone Prediction across Urban Agglomerations},
-  author  = {Zhu, Mingkun and others},
-  journal = {Environmental Modelling & Software},
-  year    = {TBD}
+@article{zhu2026ozonekbnet,
+  title  = {A Retrieval-Augmented Historical Knowledge-Base Framework with Residual Correction for Station-Level Ozone Forecasting across Urban Agglomerations},
+  author = {Zhu, Mingkun and Han, Xiaoxia and Wu, Jinde and Zhu, Haonan and Chai, Wenxin},
+  note   = {Manuscript submitted to Air Quality, Atmosphere \& Health},
+  year   = {2026}
 }
 ```
 
+The citation entry will be updated after publication.
+
 ## License
 
-This project is released under the MIT License for academic research use. Please see the `LICENSE` file for details.
+This project is released under the MIT License. See the `LICENSE` file for details.
 
-## Test Data
+## Contact
 
-The repository provides the fixed 2025 test samples used for evaluation at:
-
-https://github.com/mingkun-zhu/OzoneKBNet/tree/main/test_data/data_for_test_2025_samples
-
-These samples are provided to facilitate review, check the required CSV schema, and illustrate the sample-level evaluation protocol. Each CSV file contains 144 hourly rows, including a 96-hour input window and a 48-hour target window.
-
-The test samples are not the full raw or processed training datasets. The full raw and processed training datasets, knowledge-base files, FAISS indices, and model checkpoints are not redistributed due to data redistribution restrictions and file-size considerations.
+For questions about the implementation or data-processing protocol, please refer to the corresponding-author information in the manuscript.
